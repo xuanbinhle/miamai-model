@@ -3,12 +3,13 @@ import json
 import torch
 import argparse
 from transformers import CLIPProcessor
-from models.mmsd20_model import MV_CLIP
+from models.mmsd20_model import MV_CLIPVisoBert
 from data_utils.dataloader import Sarcasm
 from torch.utils.data import DataLoader
 from data_utils.utils import collate_fn
 from tqdm import tqdm
 from PIL import ImageFile
+from transformers import AutoTokenizer
 
 os.environ['TORCH_USE_CUDA_DSA'] = '1'
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
@@ -17,14 +18,14 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 LABEL_MAPPING = {0: 'not-sarcasm', 1: 'multi-sarcasm', 2: 'image-sarcasm', 3: 'text-sarcasm'}
 
 def set_args():
-    root_output = '../output_dir/MV_CLIP'
+    root_output = './output_dir_CLIPVisoBert/'
     L_model_state = sorted(os.listdir(root_output))
     model_path = os.path.join(root_output, L_model_state[-1])
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_path', default=model_path, type=str, help='path to the saved model checkpoint')
+    parser.add_argument('--model_path', default='/data/npl/ViInfographicCaps/code/lmm_dscB/CLIP_VisoBert/output_dir_CLIPVisoBert/MV_CLIP/model_epoch_3.pt', type=str, help='path to the saved model checkpoint')
     parser.add_argument('--batch_size', default=32, type=int, help='batch size for predictions')
-    parser.add_argument('--output_file', default='results.json', type=str, help='file to save predictions')
+    parser.add_argument('--output_file', default='/data/npl/ViInfographicCaps/code/lmm_dscB/CLIP_VisoBert/results.json', type=str, help='file to save predictions')
     parser.add_argument('--max_len', default=77, type=int, help='max len of text based on CLIP')
     parser.add_argument('--layers', default=3, type=int, help='number of transform layers')
     parser.add_argument('--simple_linear', default=False, type=bool, help='linear implementation choice')
@@ -36,7 +37,7 @@ def set_args():
 
 def load_model(args, device):
     # Load the trained model
-    model = MV_CLIP(args)
+    model = MV_CLIPVisoBert(args)
     # model = torch.nn.DataParallel(model)
     model.load_state_dict(torch.load(args.model_path, map_location=device))
     model.to(device)
@@ -52,23 +53,16 @@ def create_result(predictions, phase):
     
     return result_final
 
-def predict(args, model, data_loader, processor, device):
+def predict(args, model, data_loader, processor_image, processor_text, device):
     predictions = []
     with torch.no_grad():
         for batch in tqdm(data_loader, desc="Predicting"):
-            text_list, image_list, _, _ = batch  # Only text and image data needed for inference
-
-            inputs = processor(
-                text=text_list,
-                images=image_list,
-                padding="max_length",
-                truncation=True,
-                max_length=args.max_len,
-                return_tensors="pt"
-            ).to(device)
+            text_list, image_list, label_list, _ = batch
+            inputs_text = processor_text(text_list, return_tensors="pt", padding='max_length', truncation=True, max_length=args.text_size).to(device)
+            inputs_image = processor_image(text=text_list, images=image_list, padding='max_length', truncation=True, max_length=args.max_len, return_tensors="pt").to(device)
             
             # Perform inference
-            outputs = model(inputs, labels=None)
+            outputs = model(inputs_image=inputs_image, inputs_text=inputs_text, labels=None)
             predicted_labels = torch.argmax(outputs[0], -1).cpu().numpy()
             predictions.extend([LABEL_MAPPING[label] for label in predicted_labels])
 
@@ -76,18 +70,19 @@ def predict(args, model, data_loader, processor, device):
 
 def main():
     args = set_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:6" if torch.cuda.is_available() else "cpu")
 
     # Load the model and processor
     model = load_model(args, device)
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    processor_image = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    processor_text = AutoTokenizer.from_pretrained("uitnlp/visobert")
 
     # Load the test dataset
     test_set = Sarcasm(file_annotation="public_test/vimmsd_public_test.json", file_image="public_test/public-test-images")
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
     
     # Generate predictions
-    predictions = predict(args, model, test_loader, processor, device)
+    predictions = predict(args, model, test_loader, processor_image, processor_text, device)
     
     result_final = create_result(predictions, 'dev')
 
