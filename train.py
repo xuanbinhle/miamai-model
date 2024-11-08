@@ -37,7 +37,7 @@ def set_args():
     parser.add_argument('--image_size', default=768, type=int, help='image hidden size')
     parser.add_argument('--max_len', default=77, type=int, help='max len of text based on CLIP')
     parser.add_argument('--weight_decay', default=0.05, type=float, help='weight decay')
-    parser.add_argument('--output_dir', default='../output_dir/', type=str, help='the output path')
+    parser.add_argument('--output_dir', default='./output_dir_CLIPVisoBert/', type=str, help='the output path')
     parser.add_argument('--seed', type=int, default=42, help='random seed')
     parser.add_argument('--layers', default=3, type=int, help='number of transform layers')
     parser.add_argument('--dropout_rate', default=0.1, type=float, help='dropout rate')
@@ -77,7 +77,7 @@ def train(args, model, device, train_loader, val_loader, processor_image, proces
 
             labels = torch.stack(label_list, dim=0).to(device)
             
-            loss, _ = model(inputs_image, inputs_text, labels=labels)
+            loss, _ = model(inputs_image=inputs_image, inputs_text=inputs_text, labels=labels)
 
             total_loss += loss.item()
             loss.backward()
@@ -88,7 +88,7 @@ def train(args, model, device, train_loader, val_loader, processor_image, proces
         avg_loss = total_loss / len(train_loader)
         logger.info(f'Epoch [{i_epoch+1}/{args.num_train_epochs}], Loss: {avg_loss:.4f}')
 
-        val_f1, val_precision, val_recall = evaluate_f1(args, model, device, val_loader, processor, mode='val')
+        val_f1, val_precision, val_recall = evaluate_f1(args, model, device, val_loader, processor_image, processor_text, mode='val')
         logger.info(f'Validation F1: {val_f1:.4f}, Precision: {val_precision:.4f}, Recall: {val_recall:.4f}')
         
         # Save best model if improved
@@ -116,6 +116,8 @@ def evaluate_f1(args, model, device, data_loader, processor_image, processor_tex
             total_loss += loss.item()
 
             outputs = torch.argmax(t_outputs, -1)
+            labels = torch.argmax(labels, -1)
+            
             t_targets_all.extend(labels.detach().cpu().numpy())
             t_outputs_all.extend(outputs.detach().cpu().numpy())
 
@@ -127,12 +129,12 @@ def evaluate_f1(args, model, device, data_loader, processor_image, processor_tex
 
 def main():
     args = set_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:6" if torch.cuda.is_available() else "cpu")
 
     seed_everything(args.seed)
 
     # Load datasets
-    train_set = Sarcasm(file_annotation="train/vimmsd_train.json", file_image="train/train-images")
+    train_set = Sarcasm(file_annotation="train/vimmsd_balanced_train.json", file_image="train/train-images")
     train_set, val_set = train_test_split(train_set, test_size=0.1, random_state=args.seed)
 
     # Use DataLoader for batching
